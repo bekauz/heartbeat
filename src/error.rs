@@ -5,4 +5,10 @@ use thiserror::Error;
 pub enum ContractError {
     #[error("{0}")]
     Std(#[from] StdError),
+
+    #[error("Queue is full. Process some messages before pushing more.")]
+    QueueFullError {},
+
+    #[error("Failed to retrieve message.")]
+    QueuePopError {},
 }

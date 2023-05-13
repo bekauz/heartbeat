@@ -1,13 +1,13 @@
 use cosmwasm_schema::cw_serde;
-use cosmwasm_std::IbcMsg;
+use cosmwasm_std::{CosmosMsg};
 
 #[cw_serde]
 pub struct InstantiateMsg {}
 
 #[cw_serde]
 pub enum ExecuteMsg {
-    Tick {},
-    Schedule { msg: IbcMsg },
+    Beat {},
+    Schedule { msg: CosmosMsg },
 }
 
 #[cw_serde]
