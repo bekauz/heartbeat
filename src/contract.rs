@@ -53,7 +53,7 @@ fn process_head_msg(deps: DepsMut) -> Result<Response, ContractError> {
     ))
 }
 
-fn schedule_cosmos_msg(msg: CosmosMsg, deps: DepsMut) -> Result<Response, ContractError> {
+pub(crate) fn schedule_cosmos_msg(msg: CosmosMsg, deps: DepsMut) -> Result<Response, ContractError> {
     // validate queue length
     if MSG_QUEUE.len(deps.storage)?.eq(&(u32::MAX - 1)) {
         return Err(ContractError::QueueFullError {})
