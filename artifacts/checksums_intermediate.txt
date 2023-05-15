@@ -1,0 +1,1 @@
+29f60c594a9e0c0534f9a94176d1278c02e2ff5ee0038246267a06230d761cfe  ./target/wasm32-unknown-unknown/release/cw_heartbeat.wasm
