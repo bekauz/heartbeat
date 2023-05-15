@@ -12,5 +12,10 @@ pub enum ExecuteMsg {
 
 #[cw_serde]
 pub enum QueryMsg {
-    
+    GetQueuedMessages {},
+}
+
+#[cw_serde]
+pub struct QueueResponse {
+    pub messages: Vec<CosmosMsg>,
 }

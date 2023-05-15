@@ -5,7 +5,7 @@ use cosmwasm_std::{
 };
 use cw2::set_contract_version;
 
-use crate::{msg::{InstantiateMsg, ExecuteMsg, QueryMsg}, error::ContractError, state::MSG_QUEUE};
+use crate::{msg::{InstantiateMsg, ExecuteMsg, QueryMsg, QueueResponse}, error::ContractError, state::MSG_QUEUE};
 
 const CONTRACT_NAME: &str = "crates.io:cw-heartbeat";
 const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -70,6 +70,15 @@ pub(crate) fn schedule_cosmos_msg(msg: CosmosMsg, deps: DepsMut) -> Result<Respo
 
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
-    to_binary(&true)
+    match msg {
+        QueryMsg::GetQueuedMessages {} => to_binary(&query_queue(deps)?),
+    }
 }
 
+fn query_queue(deps: Deps) -> StdResult<QueueResponse> {
+    let messages: Vec<CosmosMsg>  = MSG_QUEUE
+        .iter(deps.storage)?
+        .collect::<StdResult<Vec<CosmosMsg>>>()?;    
+
+    Ok(QueueResponse { messages })
+}
