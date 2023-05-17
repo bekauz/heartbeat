@@ -25,100 +25,212 @@ func TestLearn(t *testing.T) {
 
 	ctx := context.Background()
 
+	var reward_denoms [1]string
+	var provider_reward_denoms [1]string
+
+	reward_denoms[0] = "untrn"
+	provider_reward_denoms[0] = "uatom"
 	// Chain Factory
-	cf := interchaintest.NewBuiltinChainFactory(zaptest.NewLogger(t), []*interchaintest.ChainSpec{
-		{Name: "gaia", Version: "v7.0.0", ChainConfig: ibc.ChainConfig{
-			GasPrices: "0.0uatom",
+	cf := ibctest.NewBuiltinChainFactory(zaptest.NewLogger(t), []*ibctest.ChainSpec{
+		{Name: "gaia", Version: "v9.1.0", ChainConfig: ibc.ChainConfig{
+			ModifyGenesis: cosmos.PrintGenesis(),
+			GasPrices:     "0.0atom",
 		}},
-		{Name: "osmosis", Version: "v11.0.0"},
+		{
+			ChainConfig: ibc.ChainConfig{
+				Type:    "cosmos",
+				Name:    "neutron",
+				ChainID: "neutron-2",
+				Images: []ibc.DockerImage{
+					{
+						Repository: "neutron-node",
+						Version:    "latest",
+					},
+				},
+				Bin:            "neutrond",
+				Bech32Prefix:   "neutron",
+				Denom:          "untrn",
+				GasPrices:      "0.0untrn",
+				GasAdjustment:  1.3,
+				TrustingPeriod: "1197504s",
+				NoHostMount:    false,
+				ModifyGenesis:  cosmos.ModifyNeutronGenesis("0.05", reward_denoms[:], provider_reward_denoms[:]),
+			},
+		},
+		{Name: "stride", Version: "v9.0.0"},
 	})
 
 	chains, err := cf.Chains(t.Name())
 	require.NoError(t, err)
-	gaia, osmosis := chains[0], chains[1]
+	// provider, consumer := chains[0], chains[1]
+	provider, consumer, stride := chains[0], chains[1], chains[2]
 
 	// Relayer Factory
-	client, network := interchaintest.DockerSetup(t)
-	r := interchaintest.NewBuiltinRelayerFactory(ibc.CosmosRly, zaptest.NewLogger(t)).Build(
-		t, client, network)
+	client, network := ibctest.DockerSetup(t)
+	r := ibctest.NewBuiltinRelayerFactory(
+		ibc.CosmosRly,
+		zaptest.NewLogger(t),
+		relayer.CustomDockerImage("ghcr.io/cosmos/relayer", "v2.3.1", rly.RlyDefaultUidGid),
+		relayer.RelayerOptionExtraStartFlags{Flags: []string{"-d", "--log-format", "console"}},
+	).Build(t, client, network)
 
 	// Prep Interchain
-	const ibcPath = "gaia-osmo-demo"
-	ic := interchaintest.NewInterchain().
-		AddChain(gaia).
-		AddChain(osmosis).
+	const icsPath = "ics-path"
+	const gaiaNeutronIbcPath = "gaia-neutron-ibc-path"
+	const gaiaStrideIbcPath = "gaia-stride-ibc-path"
+	ic := ibctest.NewInterchain().
+		AddChain(provider).
+		AddChain(consumer).
+		AddChain(stride).
 		AddRelayer(r, "relayer").
-		AddLink(interchaintest.InterchainLink{
-			Chain1:  gaia,
-			Chain2:  osmosis,
+		AddProviderConsumerLink(ibctest.ProviderConsumerLink{
+			Provider: provider,
+			Consumer: consumer,
+			Relayer:  r,
+			Path:     icsPath,
+		}).
+		AddLink(ibctest.InterchainLink{
+			Chain1:  provider,
+			Chain2:  consumer,
 			Relayer: r,
-			Path:    ibcPath,
+			Path:    gaiaNeutronIbcPath,
+		}).
+		AddLink(ibctest.InterchainLink{
+			Chain1:  provider,
+			Chain2:  stride,
+			Relayer: r,
+			Path:    gaiaStrideIbcPath,
 		})
 
 	// Log location
-	f, err := interchaintest.CreateLogFile(fmt.Sprintf("%d.json", time.Now().Unix()))
+	f, err := ibctest.CreateLogFile(fmt.Sprintf("%d.json", time.Now().Unix()))
 	require.NoError(t, err)
 	// Reporter/logs
 	rep := testreporter.NewReporter(f)
 	eRep := rep.RelayerExecReporter(t)
 
 	// Build interchain
-	require.NoError(t, ic.Build(ctx, eRep, interchaintest.InterchainBuildOptions{
+	err = ic.Build(ctx, eRep, ibctest.InterchainBuildOptions{
 		TestName:          t.Name(),
 		Client:            client,
 		NetworkID:         network,
-		BlockDatabaseFile: interchaintest.DefaultBlockDatabaseFilepath(),
+		BlockDatabaseFile: ibctest.DefaultBlockDatabaseFilepath(),
 
-		SkipPathCreation: false},
-	),
-	)
+		SkipPathCreation: false,
+	})
+	require.NoError(t, err, "failed to build interchain")
 
-	// Create and Fund User Wallets
+	err = testutil.WaitForBlocks(ctx, 10, provider, consumer, stride)
+	require.NoError(t, err, "failed to wait for blocks")
+
+	// Create and Fund User Wallets on gaia, neutron, and stride
 	fundAmount := int64(10_000_000)
-	users := interchaintest.GetAndFundTestUsers(t, ctx, "default", fundAmount, gaia, osmosis)
-	gaiaUser := users[0]
-	osmosisUser := users[1]
+	users := ibctest.GetAndFundTestUsers(t, ctx, "default", fundAmount, provider, consumer, stride)
 
-	gaiaUserBalInitial, err := gaia.GetBalance(ctx, gaiaUser.FormattedAddress(), gaia.Config().Denom)
+	gaiaUser := users[0]
+	neutronUser := users[1]
+	strideUser := users[2]
+
+	// Wait a few blocks for user accounts to be created on chain.
+	err = testutil.WaitForBlocks(ctx, 5, provider, consumer, stride)
+	require.NoError(t, err)
+
+	gaiaUserBalInitial, err := provider.GetBalance(
+		ctx,
+		gaiaUser.Bech32Address(provider.Config().Bech32Prefix),
+		provider.Config().Denom)
 	require.NoError(t, err)
 	require.Equal(t, fundAmount, gaiaUserBalInitial)
 
 	// Get Channel ID
-	gaiaChannelInfo, err := r.GetChannels(ctx, eRep, gaia.Config().ChainID)
+	gaiaChannelInfo, err := r.GetChannels(ctx, eRep, provider.Config().ChainID)
 	require.NoError(t, err)
-	gaiaChannelID := gaiaChannelInfo[0].ChannelID
+	gaiaChannelID := gaiaChannelInfo[1].ChannelID
 
-	osmoChannelInfo, err := r.GetChannels(ctx, eRep, osmosis.Config().ChainID)
+	neutronChannelInfo, err := r.GetChannels(ctx, eRep, consumer.Config().ChainID)
 	require.NoError(t, err)
-	osmoChannelID := osmoChannelInfo[0].ChannelID
+	neutronChannelID := neutronChannelInfo[1].ChannelID
 
-	// Send Transaction
-	amountToSend := int64(1_000_000)
-	dstAddress := osmosisUser.FormattedAddress()
-	transfer := ibc.WalletAmount{
-		Address: dstAddress,
-		Denom:   gaia.Config().Denom,
+	// strideChannelInfo, err := r.GetChannels(ctx, eRep, stride.Config().ChainID)
+	// require.NoError(t, err)
+	// strideChannelID := strideChannelInfo[0].ChannelID
+	strideChannelInfo, err := ibc.GetTransferChannel(ctx, r, eRep, provider.Config().ChainID, stride.Config().ChainID)
+	require.NoError(t, err)
+	strideChannelID := strideChannelInfo.ChannelID
+
+	amountToSend := int64(500_000)
+	neutronAddress := neutronUser.Bech32Address(consumer.Config().Bech32Prefix)
+	strideAddress := strideUser.Bech32Address(stride.Config().Bech32Prefix)
+
+	// Trace IBC Denoms
+	neutronSrcDenomTrace := transfertypes.ParseDenomTrace(
+		transfertypes.GetPrefixedDenom("transfer", neutronChannelID, provider.Config().Denom))
+	strideSrcDenomTrace := transfertypes.ParseDenomTrace(
+		transfertypes.GetPrefixedDenom("transfer", strideChannelID, provider.Config().Denom))
+
+	neutronDstIbcDenom := neutronSrcDenomTrace.IBCDenom()
+	strideDstIbcDenom := strideSrcDenomTrace.IBCDenom()
+
+	transferNeutron := ibc.WalletAmount{
+		Address: neutronAddress,
+		Denom:   provider.Config().Denom,
 		Amount:  amountToSend,
 	}
-	tx, err := gaia.SendIBCTransfer(ctx, gaiaChannelID, gaiaUser.KeyName(), transfer, ibc.TransferOptions{})
-	require.NoError(t, err)
-	require.NoError(t, tx.Validate())
+	transferStride := ibc.WalletAmount{
+		Address: strideAddress,
+		Denom:   provider.Config().Denom,
+		Amount:  amountToSend,
+	}
 
-	// relay MsgRecvPacket to osmosis, then MsgAcknowledgement back to gaia
-	require.NoError(t, r.Flush(ctx, eRep, ibcPath, gaiaChannelID))
+	neutronTx, err := provider.SendIBCTransfer(
+		ctx,
+		gaiaChannelID,
+		gaiaUser.GetKeyName(),
+		transferNeutron,
+		ibc.TransferOptions{})
+	require.NoError(t, err)
+	require.NoError(t, neutronTx.Validate())
+
+	strideTx, err := provider.SendIBCTransfer(
+		ctx,
+		strideChannelID,
+		gaiaUser.GetKeyName(),
+		transferStride,
+		ibc.TransferOptions{})
+	require.NoError(t, err)
+	require.NoError(t, strideTx.Validate())
+
+	// relay IBC packets and acks
+	require.NoError(t, r.FlushPackets(ctx, eRep, gaiaNeutronIbcPath, neutronChannelID))
+	require.NoError(t, r.FlushPackets(ctx, eRep, gaiaStrideIbcPath, strideChannelID))
+	require.NoError(t, r.FlushAcknowledgements(ctx, eRep, gaiaNeutronIbcPath, gaiaChannelID))
+	require.NoError(t, r.FlushAcknowledgements(ctx, eRep, gaiaStrideIbcPath, gaiaChannelID))
+
+	// relay ics packets and acks
+	require.NoError(t, r.FlushPackets(ctx, eRep, icsPath, neutronChannelID))
+	require.NoError(t, r.FlushAcknowledgements(ctx, eRep, icsPath, gaiaChannelID))
 
 	// test source wallet has decreased funds
-	expectedBal := gaiaUserBalInitial - amountToSend
-	gaiaUserBalNew, err := gaia.GetBalance(ctx, gaiaUser.FormattedAddress(), gaia.Config().Denom)
+	expectedBal := gaiaUserBalInitial - amountToSend*2
+	gaiaUserBalNew, err := provider.GetBalance(
+		ctx,
+		gaiaUser.Bech32Address(provider.Config().Bech32Prefix),
+		provider.Config().Denom)
 	require.NoError(t, err)
 	require.Equal(t, expectedBal, gaiaUserBalNew)
 
-	// Trace IBC Denom
-	srcDenomTrace := transfertypes.ParseDenomTrace(transfertypes.GetPrefixedDenom("transfer", osmoChannelID, gaia.Config().Denom))
-	dstIbcDenom := srcDenomTrace.IBCDenom()
-
-	// Test destination wallet has increased funds
-	osmosUserBalNew, err := osmosis.GetBalance(ctx, osmosisUser.FormattedAddress(), dstIbcDenom)
+	// Test destination wallets have increased funds
+	neutronUserBalNew, err := consumer.GetBalance(
+		ctx,
+		neutronUser.Bech32Address(consumer.Config().Bech32Prefix),
+		neutronDstIbcDenom)
 	require.NoError(t, err)
-	require.Equal(t, amountToSend, osmosUserBalNew)
+	require.Equal(t, amountToSend, neutronUserBalNew)
+
+	strideUserBalNew, err := stride.GetBalance(
+		ctx,
+		strideUser.Bech32Address(stride.Config().Bech32Prefix),
+		strideDstIbcDenom)
+	require.NoError(t, err)
+	require.Equal(t, amountToSend, strideUserBalNew)
 }

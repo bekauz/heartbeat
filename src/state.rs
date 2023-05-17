@@ -4,7 +4,6 @@ use cw_storage_plus::{Deque, Item, Map};
 pub const NONCE: Item<u128> = Item::new("nonce");
 pub const MSG_QUEUE: Deque<CosmosMsg> = Deque::new("msg_queue");
 
-
 // ibc
 
 /// (channel_id) -> count. Reset on channel closure.
