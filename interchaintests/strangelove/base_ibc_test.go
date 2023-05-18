@@ -2,14 +2,20 @@ package strangelove
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"github.com/icza/dyno"
 	"testing"
 	"time"
 
-	transfertypes "github.com/cosmos/ibc-go/v7/modules/apps/transfer/types"
-	interchaintest "github.com/strangelove-ventures/interchaintest/v7"
-	"github.com/strangelove-ventures/interchaintest/v7/ibc"
-	"github.com/strangelove-ventures/interchaintest/v7/testreporter"
+	transfertypes "github.com/cosmos/ibc-go/v3/modules/apps/transfer/types"
+	ibctest "github.com/strangelove-ventures/interchaintest/v3"
+	"github.com/strangelove-ventures/interchaintest/v3/chain/cosmos"
+	"github.com/strangelove-ventures/interchaintest/v3/ibc"
+	"github.com/strangelove-ventures/interchaintest/v3/relayer"
+	"github.com/strangelove-ventures/interchaintest/v3/relayer/rly"
+	"github.com/strangelove-ventures/interchaintest/v3/testreporter"
+	"github.com/strangelove-ventures/interchaintest/v3/testutil"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap/zaptest"
 )
@@ -33,8 +39,7 @@ func TestLearn(t *testing.T) {
 	// Chain Factory
 	cf := ibctest.NewBuiltinChainFactory(zaptest.NewLogger(t), []*ibctest.ChainSpec{
 		{Name: "gaia", Version: "v9.1.0", ChainConfig: ibc.ChainConfig{
-			ModifyGenesis: cosmos.PrintGenesis(),
-			GasPrices:     "0.0atom",
+			GasPrices: "0.0atom",
 		}},
 		{
 			ChainConfig: ibc.ChainConfig{
@@ -54,7 +59,7 @@ func TestLearn(t *testing.T) {
 				GasAdjustment:  1.3,
 				TrustingPeriod: "1197504s",
 				NoHostMount:    false,
-				ModifyGenesis:  cosmos.ModifyNeutronGenesis("0.05", reward_denoms[:], provider_reward_denoms[:]),
+				ModifyGenesis:  ModifyNeutronGenesis("0.05", reward_denoms[:], provider_reward_denoms[:]),
 			},
 		},
 		{Name: "stride", Version: "v9.0.0"},
@@ -233,4 +238,35 @@ func TestLearn(t *testing.T) {
 		strideDstIbcDenom)
 	require.NoError(t, err)
 	require.Equal(t, amountToSend, strideUserBalNew)
+}
+
+func ModifyNeutronGenesis(
+	soft_opt_out_threshold string,
+	reward_denoms []string,
+	provider_reward_denoms []string) func(ibc.ChainConfig, []byte) ([]byte, error) {
+	return func(chainConfig ibc.ChainConfig, genbz []byte) ([]byte, error) {
+		g := make(map[string]interface{})
+		if err := json.Unmarshal(genbz, &g); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal genesis file: %w", err)
+		}
+
+		if err := dyno.Set(g, soft_opt_out_threshold, "app_state", "ccvconsumer", "params", "soft_opt_out_threshold"); err != nil {
+			return nil, fmt.Errorf("failed to set soft_opt_out_threshold in genesis json: %w", err)
+		}
+
+		if err := dyno.Set(g, reward_denoms, "app_state", "ccvconsumer", "params", "reward_denoms"); err != nil {
+			return nil, fmt.Errorf("failed to set reward_denoms in genesis json: %w", err)
+		}
+
+		if err := dyno.Set(g, provider_reward_denoms, "app_state", "ccvconsumer", "params", "provider_reward_denoms"); err != nil {
+			return nil, fmt.Errorf("failed to set provider_reward_denoms in genesis json: %w", err)
+		}
+
+		out, err := json.Marshal(g)
+		// out, err := json.Marshal(jsonFile)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal genesis bytes to json: %w", err)
+		}
+		return out, nil
+	}
 }
