@@ -2,9 +2,7 @@ package strangelove
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"github.com/icza/dyno"
 	"testing"
 	"time"
 
@@ -59,7 +57,7 @@ func TestLearn(t *testing.T) {
 				GasAdjustment:  1.3,
 				TrustingPeriod: "1197504s",
 				NoHostMount:    false,
-				ModifyGenesis:  ModifyNeutronGenesis("0.05", reward_denoms[:], provider_reward_denoms[:]),
+				ModifyGenesis:  cosmos.ModifyNeutronGenesis("0.05", reward_denoms[:], provider_reward_denoms[:]),
 			},
 		},
 		{Name: "stride", Version: "v9.0.0"},
@@ -67,7 +65,6 @@ func TestLearn(t *testing.T) {
 
 	chains, err := cf.Chains(t.Name())
 	require.NoError(t, err)
-	// provider, consumer := chains[0], chains[1]
 	provider, consumer, stride := chains[0], chains[1], chains[2]
 
 	// Relayer Factory
@@ -147,126 +144,122 @@ func TestLearn(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, fundAmount, gaiaUserBalInitial)
 
-	// Get Channel ID
-	gaiaChannelInfo, err := r.GetChannels(ctx, eRep, provider.Config().ChainID)
-	require.NoError(t, err)
-	gaiaChannelID := gaiaChannelInfo[1].ChannelID
-
-	neutronChannelInfo, err := r.GetChannels(ctx, eRep, consumer.Config().ChainID)
-	require.NoError(t, err)
-	neutronChannelID := neutronChannelInfo[1].ChannelID
-
-	// strideChannelInfo, err := r.GetChannels(ctx, eRep, stride.Config().ChainID)
-	// require.NoError(t, err)
-	// strideChannelID := strideChannelInfo[0].ChannelID
-	strideChannelInfo, err := ibc.GetTransferChannel(ctx, r, eRep, provider.Config().ChainID, stride.Config().ChainID)
-	require.NoError(t, err)
-	strideChannelID := strideChannelInfo.ChannelID
-
 	amountToSend := int64(500_000)
 	neutronAddress := neutronUser.Bech32Address(consumer.Config().Bech32Prefix)
 	strideAddress := strideUser.Bech32Address(stride.Config().Bech32Prefix)
 
-	// Trace IBC Denoms
-	neutronSrcDenomTrace := transfertypes.ParseDenomTrace(
-		transfertypes.GetPrefixedDenom("transfer", neutronChannelID, provider.Config().Denom))
-	strideSrcDenomTrace := transfertypes.ParseDenomTrace(
-		transfertypes.GetPrefixedDenom("transfer", strideChannelID, provider.Config().Denom))
+	t.Run("ibc to neutron", func(t *testing.T) {
+		neutronChannelInfo, err := r.GetChannels(ctx, eRep, consumer.Config().ChainID)
 
-	neutronDstIbcDenom := neutronSrcDenomTrace.IBCDenom()
-	strideDstIbcDenom := strideSrcDenomTrace.IBCDenom()
+		// r.GetChannels seems to return channels in undeterministic order
+		// this is a not-so-nice workaround
+		var neutronGaiaICSChannel ibc.ChannelOutput
+		var neutronGaiaIBCChannel ibc.ChannelOutput
+		for i, s := range neutronChannelInfo {
+			if s.Ordering == "ORDER_ORDERED" {
+				// only ics channels are ordered
+				neutronGaiaICSChannel = s
+			} else {
+				counterparty := neutronChannelInfo[i].Counterparty
+				if counterparty.PortID == "transfer" && len(counterparty.ChannelID) > 5 {
+					neutronGaiaIBCChannel = s
+				}
+			}
+		}
+		gaiaNeutronICSChannelID := neutronGaiaICSChannel.Counterparty.ChannelID
+		gaiaNeutronIBCChannelID := neutronGaiaIBCChannel.Counterparty.ChannelID
 
-	transferNeutron := ibc.WalletAmount{
-		Address: neutronAddress,
-		Denom:   provider.Config().Denom,
-		Amount:  amountToSend,
-	}
-	transferStride := ibc.WalletAmount{
-		Address: strideAddress,
-		Denom:   provider.Config().Denom,
-		Amount:  amountToSend,
-	}
+		// Trace IBC Denoms
+		neutronSrcDenomTrace := transfertypes.ParseDenomTrace(
+			transfertypes.GetPrefixedDenom("transfer",
+				neutronGaiaIBCChannel.ChannelID,
+				provider.Config().Denom))
+		neutronDstIbcDenom := neutronSrcDenomTrace.IBCDenom()
 
-	neutronTx, err := provider.SendIBCTransfer(
-		ctx,
-		gaiaChannelID,
-		gaiaUser.GetKeyName(),
-		transferNeutron,
-		ibc.TransferOptions{})
-	require.NoError(t, err)
-	require.NoError(t, neutronTx.Validate())
-
-	strideTx, err := provider.SendIBCTransfer(
-		ctx,
-		strideChannelID,
-		gaiaUser.GetKeyName(),
-		transferStride,
-		ibc.TransferOptions{})
-	require.NoError(t, err)
-	require.NoError(t, strideTx.Validate())
-
-	// relay IBC packets and acks
-	require.NoError(t, r.FlushPackets(ctx, eRep, gaiaNeutronIbcPath, neutronChannelID))
-	require.NoError(t, r.FlushPackets(ctx, eRep, gaiaStrideIbcPath, strideChannelID))
-	require.NoError(t, r.FlushAcknowledgements(ctx, eRep, gaiaNeutronIbcPath, gaiaChannelID))
-	require.NoError(t, r.FlushAcknowledgements(ctx, eRep, gaiaStrideIbcPath, gaiaChannelID))
-
-	// relay ics packets and acks
-	require.NoError(t, r.FlushPackets(ctx, eRep, icsPath, neutronChannelID))
-	require.NoError(t, r.FlushAcknowledgements(ctx, eRep, icsPath, gaiaChannelID))
-
-	// test source wallet has decreased funds
-	expectedBal := gaiaUserBalInitial - amountToSend*2
-	gaiaUserBalNew, err := provider.GetBalance(
-		ctx,
-		gaiaUser.Bech32Address(provider.Config().Bech32Prefix),
-		provider.Config().Denom)
-	require.NoError(t, err)
-	require.Equal(t, expectedBal, gaiaUserBalNew)
-
-	// Test destination wallets have increased funds
-	neutronUserBalNew, err := consumer.GetBalance(
-		ctx,
-		neutronUser.Bech32Address(consumer.Config().Bech32Prefix),
-		neutronDstIbcDenom)
-	require.NoError(t, err)
-	require.Equal(t, amountToSend, neutronUserBalNew)
-
-	strideUserBalNew, err := stride.GetBalance(
-		ctx,
-		strideUser.Bech32Address(stride.Config().Bech32Prefix),
-		strideDstIbcDenom)
-	require.NoError(t, err)
-	require.Equal(t, amountToSend, strideUserBalNew)
-}
-
-func ModifyNeutronGenesis(
-	soft_opt_out_threshold string,
-	reward_denoms []string,
-	provider_reward_denoms []string) func(ibc.ChainConfig, []byte) ([]byte, error) {
-	return func(chainConfig ibc.ChainConfig, genbz []byte) ([]byte, error) {
-		g := make(map[string]interface{})
-		if err := json.Unmarshal(genbz, &g); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal genesis file: %w", err)
+		transferNeutron := ibc.WalletAmount{
+			Address: neutronAddress,
+			Denom:   provider.Config().Denom,
+			Amount:  amountToSend,
 		}
 
-		if err := dyno.Set(g, soft_opt_out_threshold, "app_state", "ccvconsumer", "params", "soft_opt_out_threshold"); err != nil {
-			return nil, fmt.Errorf("failed to set soft_opt_out_threshold in genesis json: %w", err)
+		neutronTx, err := provider.SendIBCTransfer(
+			ctx,
+			gaiaNeutronIBCChannelID,
+			gaiaUser.GetKeyName(),
+			transferNeutron,
+			ibc.TransferOptions{})
+		require.NoError(t, err)
+		require.NoError(t, neutronTx.Validate())
+
+		// relay IBC packets and acks
+		require.NoError(t, r.FlushPackets(ctx, eRep, gaiaNeutronIbcPath, neutronGaiaIBCChannel.ChannelID))
+		require.NoError(t, r.FlushAcknowledgements(ctx, eRep, gaiaNeutronIbcPath, gaiaNeutronIBCChannelID))
+
+		// relay ics packets and acks
+		require.NoError(t, r.FlushPackets(ctx, eRep, icsPath, neutronGaiaICSChannel.ChannelID))
+		require.NoError(t, r.FlushAcknowledgements(ctx, eRep, icsPath, gaiaNeutronICSChannelID))
+
+		// test source wallet has decreased funds
+		expectedBal := gaiaUserBalInitial - amountToSend
+		gaiaUserBalNew, err := provider.GetBalance(
+			ctx,
+			gaiaUser.Bech32Address(provider.Config().Bech32Prefix),
+			provider.Config().Denom)
+		require.NoError(t, err)
+		require.Equal(t, expectedBal, gaiaUserBalNew)
+
+		// Test destination wallets have increased funds
+		neutronUserBalNew, err := consumer.GetBalance(
+			ctx,
+			neutronUser.Bech32Address(consumer.Config().Bech32Prefix),
+			neutronDstIbcDenom)
+		require.NoError(t, err)
+		require.Equal(t, amountToSend, neutronUserBalNew)
+	})
+
+	t.Run("ibc to stride", func(t *testing.T) {
+
+		// get stride channel
+		strideGaiaChannelInfo, err := r.GetChannels(ctx, eRep, stride.Config().ChainID)
+		strideGaiaChannelID := strideGaiaChannelInfo[0].ChannelID
+		gaiaStrideChannel := strideGaiaChannelInfo[0].Counterparty
+		gaiaStrideChannelID := gaiaStrideChannel.ChannelID
+
+		strideSrcDenomTrace := transfertypes.ParseDenomTrace(
+			transfertypes.GetPrefixedDenom("transfer", strideGaiaChannelID, provider.Config().Denom))
+		strideDstIbcDenom := strideSrcDenomTrace.IBCDenom()
+
+		transferStride := ibc.WalletAmount{
+			Address: strideAddress,
+			Denom:   provider.Config().Denom,
+			Amount:  amountToSend,
 		}
 
-		if err := dyno.Set(g, reward_denoms, "app_state", "ccvconsumer", "params", "reward_denoms"); err != nil {
-			return nil, fmt.Errorf("failed to set reward_denoms in genesis json: %w", err)
-		}
+		strideTx, err := provider.SendIBCTransfer(
+			ctx,
+			gaiaStrideChannelID,
+			gaiaUser.GetKeyName(),
+			transferStride,
+			ibc.TransferOptions{})
+		require.NoError(t, err)
+		require.NoError(t, strideTx.Validate())
 
-		if err := dyno.Set(g, provider_reward_denoms, "app_state", "ccvconsumer", "params", "provider_reward_denoms"); err != nil {
-			return nil, fmt.Errorf("failed to set provider_reward_denoms in genesis json: %w", err)
-		}
+		require.NoError(t, r.FlushPackets(ctx, eRep, gaiaStrideIbcPath, strideGaiaChannelID))
+		require.NoError(t, r.FlushAcknowledgements(ctx, eRep, gaiaStrideIbcPath, gaiaStrideChannelID))
 
-		out, err := json.Marshal(g)
-		// out, err := json.Marshal(jsonFile)
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal genesis bytes to json: %w", err)
-		}
-		return out, nil
-	}
+		expectedBal := gaiaUserBalInitial - amountToSend*2
+		gaiaUserBalNew, err := provider.GetBalance(
+			ctx,
+			gaiaUser.Bech32Address(provider.Config().Bech32Prefix),
+			provider.Config().Denom)
+		require.NoError(t, err)
+		require.Equal(t, expectedBal, gaiaUserBalNew)
+
+		strideUserBalNew, err := stride.GetBalance(
+			ctx,
+			strideUser.Bech32Address(stride.Config().Bech32Prefix),
+			strideDstIbcDenom)
+		require.NoError(t, err)
+		require.Equal(t, amountToSend, strideUserBalNew)
+	})
 }
