@@ -61,6 +61,26 @@ func TestLearn(t *testing.T) {
 			},
 		},
 		{Name: "stride", Version: "v9.0.0"},
+		// {
+		// 	ChainConfig: ibc.ChainConfig{
+		// 		Type:    "cosmos",
+		// 		Name:    "stride",
+		// 		ChainID: "stride-3",
+		// 		Images: []ibc.DockerImage{
+		// 			{
+		// 				Repository: "stridezone",
+		// 				Version:    "stride",
+		// 			},
+		// 		},
+		// 		Bin:            "strided",
+		// 		Bech32Prefix:   "stride",
+		// 		Denom:          "ustrd",
+		// 		GasPrices:      "0.ustrd",
+		// 		GasAdjustment:  1.3,
+		// 		TrustingPeriod: "1197504s",
+		// 		NoHostMount:    false,
+		// 	},
+		// },
 	})
 
 	chains, err := cf.Chains(t.Name())
@@ -261,5 +281,17 @@ func TestLearn(t *testing.T) {
 			strideDstIbcDenom)
 		require.NoError(t, err)
 		require.Equal(t, amountToSend, strideUserBalNew)
+	})
+
+	t.Run("deploy astroport contracts", func(t *testing.T) {
+		neutron := consumer.(*cosmos.CosmosChain)
+		codeId, err := neutron.StoreContract(
+			ctx,
+			neutronUser.KeyName,
+			"../wasms/astroport_factory.wasm")
+		if err != nil {
+			t.Fatal(err)
+		}
+		print(codeId)
 	})
 }
