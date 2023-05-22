@@ -92,7 +92,7 @@ func TestLearn(t *testing.T) {
 	r := ibctest.NewBuiltinRelayerFactory(
 		ibc.CosmosRly,
 		zaptest.NewLogger(t),
-		relayer.CustomDockerImage("ghcr.io/cosmos/relayer", "v2.3.1", rly.RlyDefaultUidGid),
+		relayer.CustomDockerImage("ghcr.io/cosmos/relayer", "main", rly.RlyDefaultUidGid),
 		relayer.RelayerOptionExtraStartFlags{Flags: []string{"-d", "--log-format", "console"}},
 	).Build(t, client, network)
 
@@ -285,13 +285,32 @@ func TestLearn(t *testing.T) {
 
 	t.Run("deploy astroport contracts", func(t *testing.T) {
 		neutron := consumer.(*cosmos.CosmosChain)
-		codeId, err := neutron.StoreContract(
-			ctx,
-			neutronUser.KeyName,
-			"../wasms/astroport_factory.wasm")
-		if err != nil {
-			t.Fatal(err)
+		var astroport_contracts [3]string
+		astroport_contracts[0] = "astroport_factory.wasm"
+		astroport_contracts[1] = "astroport_pair.wasm"
+		astroport_contracts[2] = "astroport_staking.wasm"
+
+		for i, s := range astroport_contracts {
+			_ = s
+			codeId, err := neutron.StoreContract(
+				ctx,
+				neutronUser.KeyName,
+				"../wasms/"+astroport_contracts[i],
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			contract, err := neutron.InstantiateContract(
+				ctx,
+				neutronUser.KeyName,
+				codeId,
+				"{}",
+				true,
+			)
+			print("\ncontract:", contract)
+			if err != nil {
+				t.Fatal(err)
+			}
 		}
-		print(codeId)
 	})
 }
