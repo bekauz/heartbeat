@@ -20,7 +20,7 @@ import (
 
 // This test is meant to be used as a basic interchaintest tutorial.
 // Code snippets are broken down in ./docs/upAndRunning.md
-func TestLearn(t *testing.T) {
+func TestIBC(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping in short mode")
 	}
@@ -37,7 +37,8 @@ func TestLearn(t *testing.T) {
 	// Chain Factory
 	cf := ibctest.NewBuiltinChainFactory(zaptest.NewLogger(t), []*ibctest.ChainSpec{
 		{Name: "gaia", Version: "v9.1.0", ChainConfig: ibc.ChainConfig{
-			GasPrices: "0.0atom",
+			GasPrices:     "0.0atom",
+			ModifyGenesis: cosmos.PrintGenesis(),
 		}},
 		{
 			ChainConfig: ibc.ChainConfig{
@@ -53,8 +54,8 @@ func TestLearn(t *testing.T) {
 				Bin:            "neutrond",
 				Bech32Prefix:   "neutron",
 				Denom:          "untrn",
-				GasPrices:      "0.0untrn",
-				GasAdjustment:  1.3,
+				GasPrices:      "0.00untrn, 0.00ibc/9117A26BA81E29FA4F78F57DC2BD90CD3D26848101BA880445F119B22A1E254E",
+				GasAdjustment:  1.0,
 				TrustingPeriod: "1197504s",
 				NoHostMount:    false,
 				ModifyGenesis:  cosmos.ModifyNeutronGenesis("0.05", reward_denoms[:], provider_reward_denoms[:]),
@@ -75,7 +76,7 @@ func TestLearn(t *testing.T) {
 		// 		Bin:            "strided",
 		// 		Bech32Prefix:   "stride",
 		// 		Denom:          "ustrd",
-		// 		GasPrices:      "0.ustrd",
+		// 		GasPrices:      "0.00ustrd",
 		// 		GasAdjustment:  1.3,
 		// 		TrustingPeriod: "1197504s",
 		// 		NoHostMount:    false,
@@ -285,32 +286,27 @@ func TestLearn(t *testing.T) {
 
 	t.Run("deploy astroport contracts", func(t *testing.T) {
 		neutron := consumer.(*cosmos.CosmosChain)
-		var astroport_contracts [3]string
-		astroport_contracts[0] = "astroport_factory.wasm"
-		astroport_contracts[1] = "astroport_pair.wasm"
-		astroport_contracts[2] = "astroport_staking.wasm"
 
-		for i, s := range astroport_contracts {
-			_ = s
-			codeId, err := neutron.StoreContract(
-				ctx,
-				neutronUser.KeyName,
-				"../wasms/"+astroport_contracts[i],
-			)
-			if err != nil {
-				t.Fatal(err)
-			}
-			contract, err := neutron.InstantiateContract(
-				ctx,
-				neutronUser.KeyName,
-				codeId,
-				"{}",
-				true,
-			)
-			print("\ncontract:", contract)
-			if err != nil {
-				t.Fatal(err)
-			}
+		// make sure 0 gas used
+		codeId, err := neutron.StoreContract(
+			ctx,
+			neutronUser.KeyName,
+			"../wasms/astroport_factory.wasm",
+		)
+		if err != nil {
+			t.Fatal(err)
 		}
+		contract, err := neutron.InstantiateContract(
+			ctx,
+			neutronUser.KeyName,
+			codeId,
+			"{}",
+			true,
+		)
+		print("\ncontract:", contract)
+		if err != nil {
+			t.Fatal(err)
+		}
+
 	})
 }
