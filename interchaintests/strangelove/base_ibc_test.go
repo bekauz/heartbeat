@@ -47,41 +47,24 @@ func TestIBC(t *testing.T) {
 				ChainID: "neutron-2",
 				Images: []ibc.DockerImage{
 					{
-						Repository: "neutron-node",
-						Version:    "latest",
+						Repository: "neutron",
+						Version:    "local",
 					},
 				},
 				Bin:            "neutrond",
 				Bech32Prefix:   "neutron",
 				Denom:          "untrn",
-				GasPrices:      "0.00untrn, 0.00ibc/9117A26BA81E29FA4F78F57DC2BD90CD3D26848101BA880445F119B22A1E254E",
-				GasAdjustment:  1.0,
+				GasPrices:      "0.00untrn",
+				GasAdjustment:  1.3,
 				TrustingPeriod: "1197504s",
 				NoHostMount:    false,
 				ModifyGenesis:  cosmos.ModifyNeutronGenesis("0.05", reward_denoms[:], provider_reward_denoms[:]),
 			},
 		},
+		// {Name: "neutron", Version: "v1.0.1", ChainConfig: ibc.ChainConfig{
+		// ModifyGenesis: cosmos.ModifyNeutronGenesis("0.05", reward_denoms[:], provider_reward_denoms[:]),
+		// }},
 		{Name: "stride", Version: "v9.0.0"},
-		// {
-		// 	ChainConfig: ibc.ChainConfig{
-		// 		Type:    "cosmos",
-		// 		Name:    "stride",
-		// 		ChainID: "stride-3",
-		// 		Images: []ibc.DockerImage{
-		// 			{
-		// 				Repository: "stridezone",
-		// 				Version:    "stride",
-		// 			},
-		// 		},
-		// 		Bin:            "strided",
-		// 		Bech32Prefix:   "stride",
-		// 		Denom:          "ustrd",
-		// 		GasPrices:      "0.00ustrd",
-		// 		GasAdjustment:  1.3,
-		// 		TrustingPeriod: "1197504s",
-		// 		NoHostMount:    false,
-		// 	},
-		// },
 	})
 
 	chains, err := cf.Chains(t.Name())
